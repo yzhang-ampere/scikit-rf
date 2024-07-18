@@ -8,7 +8,7 @@ updates:
     interval: "monthly"
   target-branch: "dependencies"
   assignees:
-  - "jhillairet"
+  - "yzhang-ampere"
 
 # Maintain dependencies for python
 - package-ecosystem: "pip"
@@ -18,4 +18,4 @@ updates:
   target-branch: "dependencies"
   versioning-strategy: "increase-if-necessary"
   assignees:
-  - "jhillairet"
+  - "yzhang-ampere"
