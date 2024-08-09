@@ -97,7 +97,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from .constants import INF, S_DEF_DEFAULT, NumberLike
+from .constants import S_DEF_DEFAULT, NumberLike
 from .media import media
 from .network import Network, connect, innerconnect, s2s
 from .util import subplots
@@ -303,6 +303,13 @@ class Circuit:
         return ntw._ext_attrs.get("_is_circuit_ground", False)
 
     @classmethod
+    def _is_open(cls, ntw: Network):
+        """
+        Return True is the network is a open, False otherwise
+        """
+        return ntw._ext_attrs.get("_is_circuit_open", False)
+
+    @classmethod
     def Port(cls, frequency: Frequency, name: str, z0: float = 50) -> Network:
         """
         Return a 1-port Network to be used as a Circuit port.
@@ -426,11 +433,11 @@ class Circuit:
     @classmethod
     def Ground(cls, frequency: Frequency, name: str, z0: float = 50) -> Network:
         """
-        Return a 2-port network of a grounded link.
+        Return a 1-port network of a grounded link.
 
         Passing the frequency and a name is mandatory.
 
-        The ground link is modelled as an infinite shunt admittance.
+        The ground link is implemented by media.short object.
 
         Parameters
         ----------
@@ -444,7 +451,7 @@ class Circuit:
         Returns
         -------
         ground : :class:`~skrf.network.Network` object
-            2-port network
+            1-port network
 
         Examples
         --------
@@ -458,18 +465,19 @@ class Circuit:
             In [18]: ground = rf.Circuit.Ground(freq, name='GND')
 
         """
-        ground = cls.ShuntAdmittance(frequency, Y=INF, name=name)
+        _media = media.DefinedGammaZ0(frequency, z0=z0)
+        ground = _media.short(name=name)
         ground._ext_attrs['_is_circuit_ground'] = True
         return ground
 
     @classmethod
     def Open(cls, frequency: Frequency, name: str, z0: float = 50) -> Network:
         """
-        Return a 2-port network of an open link.
+        Return a 1-port network of an open link.
 
         Passing the frequency and name is mandatory.
 
-        The open link is modelled as an infinite series impedance.
+        The open link is implemented by media.open object.
 
         Parameters
         ----------
@@ -483,7 +491,7 @@ class Circuit:
         Returns
         -------
         open : :class:`~skrf.network.Network` object
-            2-port network
+            1-port network
 
         Examples
         --------
@@ -497,7 +505,10 @@ class Circuit:
             In [18]: open = rf.Circuit.Open(freq, name='open')
 
         """
-        return cls.SeriesImpedance(frequency, Z=INF, name=name)
+        _media = media.DefinedGammaZ0(frequency, z0=z0)
+        Open = _media.open(name=name)
+        Open._ext_attrs['_is_circuit_open'] = True
+        return Open
 
     def networks_dict(self,
                       connections: list[list[tuple[Network, int]]] | None = None,
@@ -1509,22 +1520,38 @@ def reduce_circuit(connections: list[list[tuple[Network, int]]],
                 if Circuit._is_ground(ntwk):
                     continue
                 tmp_gnd = Circuit.Ground(frequency=ground_ntwk.frequency,
-                                         name=f'G_{ntwk.name}_{port}',
-                                         z0=ground_ntwk.z0)
+                                         name=f'G_{ntwk.name}_{port}')
+                tmp_gnd.z0 = ground_ntwk.z0
                 tmp_cnxs.append([(ntwk, port), (tmp_gnd, 0)])
 
         connections = tmp_cnxs
 
-    # get the total number of network ports in the specified connection
+    # Cache the connections that have been processed to avoid loop
+    processed_network_names: set[str] = set()
+
+    # Calculate the total number of Network ports in the specified connection
     def calculate_ports(cnx: list[tuple[Network, int]]) -> int:
         if invalide_to_reduce(cnx):
             return -1
 
-        unique_networks = len(set(ntwk.name for ntwk, _ in cnx))
+        name_list = sorted(ntwk.name for ntwk, _ in cnx)
+        ntwks_str: str = ''.join(name_list)
+
+        unique_networks = len(set(name_list))
         total_ports = sum(ntwk.nports for ntwk, _ in cnx) - 2
 
         # Return the number of ports if the connections performed
-        return total_ports if unique_networks == 2 else total_ports // 2 - 1
+        ports = total_ports if unique_networks == 2 else total_ports // 2 - 1
+
+        # If tuples of Networks in 'connections' have the same Networks, they form a loop.
+        # Prioritize processing loops in the circuit by reducing the number of ports by 1.
+        # This reduces the computational load during the circuit reduction process.
+        if ntwks_str in processed_network_names:
+            ports -= 1
+        else:
+            processed_network_names.add(ntwks_str)
+
+        return ports
 
     # List of tuples containing connection indices and their calculated ports
     cnx_ports_list = [(idx, calculate_ports(cnx)) for idx, cnx in enumerate(connections)]

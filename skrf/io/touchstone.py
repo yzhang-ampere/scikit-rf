@@ -32,6 +32,8 @@ import typing
 import warnings
 import zipfile
 from dataclasses import dataclass, field
+from functools import cached_property
+from pathlib import Path
 from typing import Callable
 
 import numpy as np
@@ -90,7 +92,7 @@ class ParserState:
 
         return self.rank * 2
 
-    @property
+    @cached_property
     def numbers_per_line(self) -> int:
         """Returns data points per frequency point.
 
@@ -99,7 +101,7 @@ class ParserState:
         """
         if self.matrix_format == "full":
             return self.rank**2 * 2
-        return self.rank**2 * self.rank
+        return self.rank*(self.rank+1)
 
     @property
     def parse_noise(self) -> bool:
@@ -188,13 +190,13 @@ class Touchstone:
     .. [#] https://ibis.org/touchstone_ver2.0/touchstone_ver2_0.pdf
     """
 
-    def __init__(self, file: str | typing.TextIO, encoding: str | None = None):
+    def __init__(self, file: str | Path | typing.TextIO, encoding: str | None = None):
         """
         constructor
 
         Parameters
         ----------
-        file : str or file-object
+        file : str, Path, or file-object
             touchstone file to load
         encoding : str, optional
             define the file encoding to use. Default value is None,
@@ -428,12 +430,19 @@ class Touchstone:
 
             line_l = line.lower()
 
-            for k, v in self._parse_dict.items():
-                if line_l.startswith(k):
-                    v(line)
-                    break
-            else:
-                values = [float(v) for v in line.partition("!")[0].split()]
+            is_data_line = True
+            # Avoid traversing the self._parse_dict for each line by checking the first letter
+            # {"!", "#", "["} covers all the first letters of the key of the current self._parse_dict
+            if line_l[0] in {"!", "#", "["}:
+                for k, v in self._parse_dict.items():
+                    if line_l.startswith(k):
+                        v(line)
+                        is_data_line = False
+                        break
+            if is_data_line:
+                if "!" in line:
+                    line = line.partition("!")[0]
+                values = list(map(float, line.split()))
                 if not values:
                     continue
 
